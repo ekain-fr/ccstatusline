@@ -14,20 +14,27 @@ ccstatusline is a customizable status line formatter for Claude Code CLI that di
 # Install dependencies
 bun install
 
-# Run with patch (TUI mode)
+# Run in TUI mode
 bun run start
-
-# Run directly (TUI mode)
-bun run statusline
 
 # Test with piped input
 echo '{"model":{"display_name":"Claude 3.5 Sonnet"},"transcript_path":"test.jsonl"}' | bun run src/ccstatusline.ts
+
+# Or use the example payload
+bun run example
 
 # Build for npm distribution
 bun run build   # Creates dist/ccstatusline.js with Node.js 14+ compatibility
 
 # Lint and type check
 bun run lint   # Runs TypeScript type checking and ESLint with auto-fix
+
+# Run tests
+bun test   # Uses vitest
+
+# Generate API documentation
+bun run docs   # Creates docs/ directory with TypeDoc output
+bun run docs:clean   # Remove generated docs
 ```
 
 ## Architecture
@@ -64,24 +71,90 @@ The project has dual runtime compatibility - works with both Bun and Node.js:
 - **colors.ts**: Color definitions and ANSI code mapping
 
 ### Widgets (src/widgets/)
-Custom widgets implementing the StatusItemWidget interface:
-- Model, Version, OutputStyle - Claude Code metadata display
-- GitBranch, GitChanges - Git repository status
+Each widget implements the `Widget` interface defined in src/types/Widget.ts. All widgets must provide:
+- `render()`: Generates the widget's display text
+- `getDefaultColor()`: Returns the default color for the widget
+- `getDescription()`: Returns a description for the TUI
+- `getDisplayName()`: Returns the display name for the TUI
+- `getEditorDisplay()`: Returns formatted text for the editor view
+- `supportsRawValue()`: Whether the widget supports raw value mode (no label)
+- `supportsColors()`: Whether the widget supports custom colors
+- Optional: `getCustomKeybinds()`, `renderEditor()`, `handleEditorAction()`
+
+Available widgets:
+- Model, Version, OutputStyle, SessionCost - Claude Code metadata
+- GitBranch, GitChanges, GitWorktree - Git repository status
 - TokensInput, TokensOutput, TokensCached, TokensTotal - Token usage metrics
 - ContextLength, ContextPercentage, ContextPercentageUsable - Context window metrics
 - BlockTimer, SessionClock - Time tracking
 - CurrentWorkingDir, TerminalWidth - Environment info
+- CustomText, CustomCommand - User-defined content
+
+### Rendering Pipeline (src/utils/renderer.ts)
+The rendering system uses a two-pass approach for efficiency:
+1. **Pre-rendering** (`preRenderAllWidgets`): Calls each widget's render() once and caches results with plaintext length
+2. **Alignment calculation** (`calculateMaxWidthsFromPreRendered`): Determines max widths for auto-alignment in Powerline mode
+3. **Final rendering** (`renderStatusLine`): Applies colors, padding, separators, and truncation using cached pre-rendered content
+
+Two rendering modes:
+- **Regular mode**: Standard text with separators, supports flex separators for right-alignment
+- **Powerline mode** (`renderPowerlineStatusLine`): Arrow separators, caps, themes, and auto-alignment across multiple lines
+
+## Configuration Management
+
+Settings are stored in `~/.config/ccstatusline/settings.json` with automatic versioning and migration:
+- **Version tracking**: Settings include a `version` field for migration support (src/types/Settings.ts)
+- **Migrations**: Handled by src/utils/migrations.ts - automatically upgrades old config formats
+- **Validation**: Uses Zod schemas (SettingsSchema) for type-safe parsing with defaults
+- **Backup on error**: Bad settings backed up to settings.bak before reset to defaults
+- **Settings structure**:
+  - `lines`: Array of widget arrays (supports unlimited status lines)
+  - `colorLevel`: Color mode (0=none, 1=basic, 2=256, 3=truecolor)
+  - `flexMode`: Terminal width handling mode
+  - `powerline`: Powerline configuration (enabled, theme, separators, caps, autoAlign)
+  - `defaultPadding`, `defaultSeparator`: Global formatting options
+  - `overrideForegroundColor`, `overrideBackgroundColor`: Global color overrides
+  - `updatemessage`: Temporary update notifications (auto-decrements)
 
 ## Key Implementation Details
 
-- **Cross-platform stdin reading**: Detects Bun vs Node.js environment and uses appropriate stdin API
-- **Token metrics**: Parses Claude Code transcript files (JSONL format) to calculate token usage
+- **Cross-platform stdin reading**: Detects Bun vs Node.js environment and uses appropriate stdin API (src/ccstatusline.ts:28-55)
+- **Token metrics**: Parses Claude Code transcript files (JSONL format) to calculate token usage (src/utils/jsonl.ts)
 - **Git integration**: Uses child_process.execSync to get current branch and changes
-- **Terminal width management**: Three modes for handling width (full, full-minus-40, full-until-compact)
-- **Flex separators**: Special separator type that expands to fill available space
-- **Powerline mode**: Optional Powerline-style rendering with arrow separators
-- **Custom commands**: Execute shell commands and display output in status line
-- **Mergeable items**: Items can be merged together with or without padding
+- **Terminal width management**: Three flex modes (full, full-minus-40, full-until-compact) with context-aware switching
+- **Flex separators**: Special separator type that expands to fill available space, enabling right-aligned content
+- **Powerline mode**: Optional Powerline-style rendering with arrow separators, caps, themes, and auto-alignment
+- **Custom commands**: Execute shell commands and display output in status line (receives JSON via stdin)
+- **Mergeable items**: Items can be merged together with or without padding for seamless visual grouping
+- **Pre-rendering optimization**: All widgets render once per update, results cached for multiple uses (alignment, truncation, final output)
+- **Non-breaking spaces**: Output uses \u00A0 instead of regular spaces to prevent VSCode terminal trimming
+
+## Creating New Widgets
+
+To add a new widget:
+1. Create a new file in src/widgets/ implementing the Widget interface
+2. Export the widget from src/widgets/index.ts
+3. Register it in src/utils/widgets.ts using `registerWidget(type, implementation)`
+4. Add the widget type to the WidgetItemSchema in src/types/Widget.ts if needed
+5. Widget must handle null/undefined data gracefully (return null to skip rendering)
+6. Use RenderContext to access Claude Code data, token metrics, session info
+7. For interactive configuration, implement `getCustomKeybinds()` and `handleEditorAction()`
+
+Example widget structure:
+```typescript
+export const MyWidget: Widget = {
+    getDefaultColor: () => 'cyan',
+    getDescription: () => 'Shows something useful',
+    getDisplayName: () => 'My Widget',
+    getEditorDisplay: (item) => ({ displayText: 'My Widget' }),
+    render: (item, context, settings) => {
+        if (!context.data) return null;
+        return 'Hello World';
+    },
+    supportsRawValue: () => true,
+    supportsColors: () => true
+};
+```
 
 ## Bun Usage Preferences
 
@@ -94,10 +167,17 @@ Default to using Bun instead of Node.js:
 
 ## Important Notes
 
-- **patch-package**: The project uses patch-package to fix ink-gradient compatibility. Always run `bun run patch` before starting development
+- **Patches**: The project uses Bun's patchedDependencies to fix ink@6.2.0 compatibility (patches/ink@6.2.0.patch). Patches are automatically applied on `bun install`
 - **ESLint configuration**: Uses flat config format (eslint.config.js) with TypeScript and React plugins
+  - Import ordering enforced: builtin/external → internal → parent → sibling → index
+  - Single-item import newlines enforced
+  - Strict TypeScript checking with consistent type imports
 - **Build target**: When building for distribution, target Node.js 14+ for maximum compatibility
-- **Dependencies**: All runtime dependencies are bundled using `--packages=external` for npm package
-- **Type checking and linting**: Only run via `bun run lint` command, never using `npx eslint` or `eslint` directly. Never run `tsx`, `bun tsc` or any other variation
+- **Type checking and linting**: Only run via `bun run lint` command, never using `npx eslint`, `eslint`, `tsx`, `bun tsc` or any other variation directly
 - **Lint rules**: Never disable a lint rule via a comment, no matter how benign the lint warning or error may seem
-- **Testing**: No test framework is currently configured. Manual testing is done via piped input and TUI interaction
+- **Testing**: Uses vitest for testing (vitest.config.ts). Run tests with `bun test`. Currently has minimal test coverage with tests in src/utils/__tests__/ and src/widgets/__tests__/
+- **Color handling**:
+  - Chalk level set globally in ccstatusline.ts and tui/index.tsx based on settings.colorLevel
+  - Three color modes: ansi16 (basic), ansi256 (256 colors), truecolor (24-bit)
+  - ANSI codes manually constructed in Powerline mode to avoid reset interference
+- **ANSI regex**: The pattern `\\x1b\\[[0-9;]*m` is intentionally used throughout to strip/preserve color codes (no-control-regex disabled in ESLint)
