@@ -188,7 +188,7 @@ bun run docs:clean
 ```
 
 **What this does:**
-- Creates `docs/` directory with HTML documentation
+- Creates `api-docs/` directory with HTML documentation
 - Documents all types, interfaces, and functions
 - Generates browsable API reference
 
@@ -571,7 +571,7 @@ bun run start
 
 ### Build Artifacts
 - Built bundle: `dist/ccstatusline.js`
-- API docs: `docs/` (after running `bun run docs`)
+- API docs: `api-docs/` (after running `bun run docs`)
 
 ### Environment Variables
 - `CLAUDE_CONFIG_DIR`: Custom Claude config directory (optional)

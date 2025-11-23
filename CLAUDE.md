@@ -33,7 +33,7 @@ bun run lint   # Runs TypeScript type checking and ESLint with auto-fix
 bun test   # Uses vitest
 
 # Generate API documentation
-bun run docs   # Creates docs/ directory with TypeDoc output
+bun run docs   # Creates api-docs/ directory with TypeDoc output
 bun run docs:clean   # Remove generated docs
 ```
 
